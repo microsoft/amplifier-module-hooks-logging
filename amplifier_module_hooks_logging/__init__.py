@@ -15,6 +15,7 @@ from typing import Any
 
 from amplifier_core import HookResult
 from amplifier_core import ModuleCoordinator
+from amplifier_core.events import ALL_EVENTS
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,8 @@ async def mount(coordinator: ModuleCoordinator, config: dict[str, Any] | None = 
     config = config or {}
     priority = int(config.get("priority", 100))
     session_log_template = config.get(
-        "session_log_template", "~/.amplifier/projects/{project}/sessions/{session_id}/events.jsonl"
+        "session_log_template",
+        "~/.amplifier/projects/{project}/sessions/{session_id}/events.jsonl",
     )
 
     # Auto-discovery: enabled by default
@@ -91,7 +93,9 @@ async def mount(coordinator: ModuleCoordinator, config: dict[str, Any] | None = 
 
             try:
                 project_slug = _get_project_slug()
-                log_path = Path(self.template.format(project=project_slug, session_id=session_id)).expanduser()
+                log_path = Path(
+                    self.template.format(project=project_slug, session_id=session_id)
+                ).expanduser()
 
                 log_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -136,7 +140,9 @@ async def mount(coordinator: ModuleCoordinator, config: dict[str, Any] | None = 
             rec.update(payload)
             # Upgrade level based on payload (but don't downgrade from DEBUG)
             if rec["lvl"] != "DEBUG" and (
-                (payload.get("status") == "error") or payload.get("error") or ("error" in event)
+                (payload.get("status") == "error")
+                or payload.get("error")
+                or ("error" in event)
             ):
                 rec["lvl"] = "ERROR"
         except Exception as e:
@@ -150,49 +156,18 @@ async def mount(coordinator: ModuleCoordinator, config: dict[str, Any] | None = 
 
         return HookResult(action="continue")
 
-    # Standard events (always logged)
-    events = [
-        "session:start",
-        "session:end",
-        "session:resume",
-        "prompt:submit",
-        "prompt:complete",
-        "plan:start",
-        "plan:end",
-        "provider:request",
-        "provider:response",
-        "provider:error",
-        "llm:request",
-        "llm:request:debug",
-        "llm:request:raw",
-        "llm:response",
-        "llm:response:debug",
-        "llm:response:raw",
-        "tool:pre",
-        "tool:post",
-        "tool:error",
-        "thinking:delta",
-        "thinking:final",
-        "context:pre_compact",
-        "context:post_compact",
-        "context:include",
-        "artifact:write",
-        "artifact:read",
-        "policy:violation",
-        "approval:required",
-        "approval:granted",
-        "approval:denied",
-        "content_block:start",
-        "content_block:delta",
-        "content_block:end",
-    ]
+    # Use canonical events from core as the base (single source of truth)
+    # This ensures hooks-logging automatically picks up new events added to core
+    events = list(ALL_EVENTS)
 
     # Auto-discover module events via capability
     if auto_discover:
         discovered = coordinator.get_capability("observability.events") or []
         if discovered:
             events.extend(discovered)
-            logger.info(f"Auto-discovered {len(discovered)} module events: {discovered}")
+            logger.info(
+                f"Auto-discovered {len(discovered)} module events: {discovered}"
+            )
 
     # Add additional events from config
     additional = config.get("additional_events", [])
