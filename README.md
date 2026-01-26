@@ -214,6 +214,12 @@ hooks:
 
 **Log Location**: Session logs are written to `~/.amplifier/projects/<project>/sessions/<session_id>/events.jsonl`
 
+**Project Directory Detection**: The `<project>` slug is determined by:
+1. The `session.working_dir` coordinator capability (if registered)
+2. Falls back to `Path.cwd()` for backward compatibility
+
+This enables correct project identification in server/web deployments where the process cwd differs from the user's project directory.
+
 ### WARNING
 
 Shows only warnings and errors:
