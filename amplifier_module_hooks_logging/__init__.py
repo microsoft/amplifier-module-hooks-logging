@@ -26,9 +26,13 @@ def _ts() -> str:
     return datetime.now(UTC).isoformat(timespec="milliseconds")
 
 
-def _get_project_slug() -> str:
-    """Generate project slug from CWD."""
-    cwd = Path.cwd().resolve()
+def _get_project_slug(working_dir: Path | None = None) -> str:
+    """Generate project slug from working directory.
+
+    Args:
+        working_dir: Working directory to use. Falls back to cwd if not provided.
+    """
+    cwd = (working_dir or Path.cwd()).resolve()
     slug = str(cwd).replace("/", "-").replace("\\", "-").replace(":", "")
     if not slug.startswith("-"):
         slug = "-" + slug
@@ -88,10 +92,15 @@ async def mount(coordinator: ModuleCoordinator, config: dict[str, Any] | None = 
     # Auto-discovery: enabled by default
     auto_discover = config.get("auto_discover", True)
 
+    # Get working directory from capability (falls back to cwd for backward compatibility)
+    working_dir = coordinator.get_capability("session.working_dir")
+    working_dir_path = Path(working_dir) if working_dir else None
+
     # Session log writer
     class _SessionLogger:
-        def __init__(self, template: str):
+        def __init__(self, template: str, working_dir: Path | None = None):
             self.template = template
+            self.working_dir = working_dir
 
         def write(self, rec: dict[str, Any]):
             session_id = rec.get("session_id")
@@ -99,7 +108,7 @@ async def mount(coordinator: ModuleCoordinator, config: dict[str, Any] | None = 
                 return  # No session context, skip
 
             try:
-                project_slug = _get_project_slug()
+                project_slug = _get_project_slug(self.working_dir)
                 log_path = Path(
                     self.template.format(project=project_slug, session_id=session_id)
                 ).expanduser()
@@ -114,7 +123,7 @@ async def mount(coordinator: ModuleCoordinator, config: dict[str, Any] | None = 
             except Exception as e:
                 logger.error(f"Failed to write session log: {e}")
 
-    session_logger = _SessionLogger(session_log_template)
+    session_logger = _SessionLogger(session_log_template, working_dir=working_dir_path)
 
     async def handler(event: str, data: dict[str, Any]) -> HookResult:
         rec = {
