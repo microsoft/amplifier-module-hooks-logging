@@ -9,7 +9,7 @@ import json
 import pytest
 from amplifier_core.testing import TestCoordinator
 
-from amplifier_module_hooks_logging import mount
+from amplifier_module_hooks_logging import mount, on_session_ready
 
 
 @pytest.fixture
@@ -26,6 +26,7 @@ async def _mount_with_tempdir(coordinator, strip_raw_value, tmp_path):
         "strip_raw": strip_raw_value,
     }
     await mount(coordinator, config)
+    await on_session_ready(coordinator)
 
 
 async def _get_logged_record(tmp_path) -> dict:
@@ -88,6 +89,7 @@ async def test_strip_raw_default_preserves_raw_field(coordinator, tmp_path):
         # no strip_raw key — should default to False
     }
     await mount(coordinator, config)
+    await on_session_ready(coordinator)
 
     raw_payload = {"tokens": 1000}
     await coordinator.hooks.emit(
