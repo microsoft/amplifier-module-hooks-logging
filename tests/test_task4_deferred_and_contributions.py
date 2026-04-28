@@ -64,25 +64,16 @@ async def test_mount_appends_empty_dict_when_config_is_none(coordinator):
 @pytest.mark.asyncio
 async def test_mount_does_not_register_hooks(coordinator, tmp_path):
     """mount() must NOT register hooks — that is deferred to on_session_ready."""
-    # After mount, no hooks should be registered for session:start
-    # We verify this by checking _deferred_configs is populated
-    # but the coordinator's hooks haven't been touched yet.
-    # If hooks were registered, emitting an event would trigger handlers.
-    events_seen = []
+    template = str(tmp_path / "sessions" / "{session_id}" / "events.jsonl")
+    await mount(coordinator, {"session_log_template": template, "auto_discover": False})
 
-    # Register a spy on the hooks system to detect if logging handler was added
-    original_emit = coordinator.hooks.emit
+    # Emit an event BEFORE on_session_ready — no log should appear
+    await coordinator.hooks.emit("session:start", {"session_id": "test-session"})
 
-    async def spy_emit(event, data):
-        events_seen.append(event)
-        return await original_emit(event, data)
-
-    coordinator.hooks.emit = spy_emit
-
-    await mount(coordinator, {"auto_discover": False})
-    # After mount only, no hooks should be processing anything
-    # The deferred config is captured but the coordinator is untouched
-    assert len(_deferred_configs) == 1
+    log_file = tmp_path / "sessions" / "test-session" / "events.jsonl"
+    assert not log_file.exists(), (
+        "mount() must not register hooks; log must not appear until on_session_ready"
+    )
 
 
 # ─── on_session_ready() ───────────────────────────────────────────────────────
@@ -184,7 +175,9 @@ async def test_collect_contributions_list_shape_registers_events(coordinator, tm
     )
     log_file = tmp_path / "sessions" / "test-session" / "events.jsonl"
     assert log_file.exists(), "custom:event_a from list contribution must produce a log"
-    records = [json.loads(line) for line in log_file.read_text().splitlines() if line.strip()]
+    records = [
+        json.loads(line) for line in log_file.read_text().splitlines() if line.strip()
+    ]
     events_logged = [r["event"] for r in records]
     assert "custom:event_a" in events_logged, (
         f"custom:event_a must be logged; found: {events_logged}"
@@ -208,8 +201,12 @@ async def test_collect_contributions_str_shape_registers_events(coordinator, tmp
         {"session_id": "test-session", "payload": "test"},
     )
     log_file = tmp_path / "sessions" / "test-session" / "events.jsonl"
-    assert log_file.exists(), "custom:str_event from str contribution must produce a log"
-    records = [json.loads(line) for line in log_file.read_text().splitlines() if line.strip()]
+    assert log_file.exists(), (
+        "custom:str_event from str contribution must produce a log"
+    )
+    records = [
+        json.loads(line) for line in log_file.read_text().splitlines() if line.strip()
+    ]
     events_logged = [r["event"] for r in records]
     assert "custom:str_event" in events_logged, (
         f"custom:str_event must be logged; found: {events_logged}"
@@ -225,8 +222,12 @@ async def test_multiple_mounts_all_processed(coordinator, tmp_path):
     template1 = str(tmp_path / "s1" / "{session_id}" / "events.jsonl")
     template2 = str(tmp_path / "s2" / "{session_id}" / "events.jsonl")
 
-    await mount(coordinator, {"session_log_template": template1, "auto_discover": False})
-    await mount(coordinator, {"session_log_template": template2, "auto_discover": False})
+    await mount(
+        coordinator, {"session_log_template": template1, "auto_discover": False}
+    )
+    await mount(
+        coordinator, {"session_log_template": template2, "auto_discover": False}
+    )
 
     assert len(_deferred_configs) == 2
 

@@ -7,14 +7,23 @@ is stripped from event data before writing to JSONL.
 import json
 
 import pytest
-from amplifier_core.testing import TestCoordinator
+from amplifier_core.testing import MockCoordinator
 
+import amplifier_module_hooks_logging
 from amplifier_module_hooks_logging import mount, on_session_ready
+
+
+@pytest.fixture(autouse=True)
+def clear_deferred_configs():
+    """Clear _deferred_configs before and after each test to avoid leakage."""
+    amplifier_module_hooks_logging._deferred_configs.clear()
+    yield
+    amplifier_module_hooks_logging._deferred_configs.clear()
 
 
 @pytest.fixture
 def coordinator():
-    return TestCoordinator()
+    return MockCoordinator()
 
 
 async def _mount_with_tempdir(coordinator, strip_raw_value, tmp_path):

@@ -118,7 +118,9 @@ async def on_session_ready(coordinator: ModuleCoordinator) -> None:
                 try:
                     project_slug = _get_project_slug(self.working_dir)
                     log_path = Path(
-                        self.template.format(project=project_slug, session_id=session_id)
+                        self.template.format(
+                            project=project_slug, session_id=session_id
+                        )
                     ).expanduser()
 
                     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -131,7 +133,9 @@ async def on_session_ready(coordinator: ModuleCoordinator) -> None:
                 except Exception as e:
                     logger.error(f"Failed to write session log: {e}")
 
-        session_logger = _SessionLogger(session_log_template, working_dir=working_dir_path)
+        session_logger = _SessionLogger(
+            session_log_template, working_dir=working_dir_path
+        )
 
         async def handler(event: str, data: dict[str, Any]) -> HookResult:
             rec = {
@@ -197,7 +201,9 @@ async def on_session_ready(coordinator: ModuleCoordinator) -> None:
 
         # Auto-discover module events via collect_contributions (new — additive, same guard)
         if auto_discover:
-            contributions = await coordinator.collect_contributions("observability.events")
+            contributions = await coordinator.collect_contributions(
+                "observability.events"
+            )
             for contrib in contributions:
                 if isinstance(contrib, list):
                     events.extend(contrib)
@@ -212,6 +218,8 @@ async def on_session_ready(coordinator: ModuleCoordinator) -> None:
 
         # Register handlers for all events
         for ev in events:
-            coordinator.hooks.register(ev, handler, priority=priority, name="hooks-logging")
+            coordinator.hooks.register(
+                ev, handler, priority=priority, name="hooks-logging"
+            )
 
         logger.info("Mounted hooks-logging (JSONL)")
