@@ -1,0 +1,258 @@
+# True end-to-end verification for hooks-logging.
+#
+# Goal: prove that the locally-developed hooks-logging module (feature branch
+# `feat/on-session-ready`) correctly registers event handlers inside a real
+# Amplifier CLI session and writes JSONL records to disk. The test is binary:
+# either the JSONL file exists at the configured path with the expected
+# events (`session:start`, `prompt:submit`, `session:end`) — or it does not
+# (regression).
+#
+# pytest cannot verify this. pytest only exercises mount() / on_session_ready()
+# in isolation; it does not exercise the Amplifier module loader's call into
+# on_session_ready, the kernel event bus, or the filesystem write path. Only a
+# real `amplifier run` session does.
+#
+# How it works:
+#
+#   * amplifier-core is built from the Gitea mirror (admin/amplifier-core) on
+#     the host via `pypi_overrides.wheel_from_git`, served through an in-DTU
+#     pypiserver, and resolved by uv when amplifier installs its
+#     `amplifier-core>=1.0.10` dependency. This is the established
+#     amplifier-user-sim pattern; no Rust toolchain inside the container is
+#     required because the wheel is built on the host (cargo/rustc are
+#     installed there).
+#   * hooks-logging is sourced directly from the Gitea mirror in the test
+#     bundle (admin/amplifier-module-hooks-logging) via a `git+http://…` URL.
+#     This guarantees the running session uses the local feature-branch code,
+#     not the upstream PyPI/GitHub copy.
+#   * provider-mock is sourced from upstream GitHub (it is not under test).
+#     It returns a static response so no API key is required and the test is
+#     deterministic.
+#   * After provisioning, `amplifier run` is invoked with the test bundle.
+#     The setup commands then locate the resulting JSONL file under
+#     /tmp/e2e-logs/ and assert that all three required event types are
+#     present. Missing events fail the launch with a loud, explicit message.
+#
+# Variables (passed via --var at launch):
+#   GITEA_URL    — Gitea base URL reachable from the host (default
+#                  http://localhost:10130). The DTU engine rewrites
+#                  localhost/127.0.0.1 to the host gateway IP automatically
+#                  so this variable is reachable from inside the container.
+#   GITEA_TOKEN  — API token for the Gitea instance (no default).
+
+name: e2e-event-logging
+description: >
+  End-to-end verification that hooks-logging from the local feature branch
+  registers event handlers via on_session_ready inside a real `amplifier run`
+  session and writes JSONL events to disk.
+
+base:
+  image: ubuntu:24.04
+
+# Rewrite GitHub clones for the two repos under test to the local Gitea
+# mirror. The hooks-logging URL is also referenced explicitly from the test
+# bundle.md, but the rewrite is kept defensively in case any transitive
+# dependency or tool resolves the upstream URL.
+url_rewrites:
+  auth:
+    username: admin
+    token_var: GITEA_TOKEN
+  # Disable uv's GitHub fast path (api.github.com / raw.githubusercontent.com
+  # / codeload.github.com) so `uv tool install` routes through git fetch and
+  # url_rewrites can take effect. Without this, uv resolves SHAs out-of-band
+  # against upstream and the rewrite is silently bypassed.
+  allow_uv_github_fast_path: false
+  rules:
+    - match: github.com/microsoft/amplifier-core
+      target: ${GITEA_URL}/admin/amplifier-core
+    - match: github.com/colombod/amplifier-module-hooks-logging
+      target: ${GITEA_URL}/admin/amplifier-module-hooks-logging
+
+# Build amplifier-core from the Gitea mirror on the host (where cargo/rustc
+# are installed) and serve it through pypiserver inside the DTU. uv resolves
+# `amplifier-core>=1.0.10` (transitive of `amplifier`) from this index.
+pypi_overrides:
+  packages:
+    - name: amplifier-core
+      wheel_from_git:
+        repo: ${GITEA_URL}/admin/amplifier-core.git
+        ref: main
+        username: admin
+        token_var: GITEA_TOKEN
+        build_cmd: uv run --with maturin maturin build --release
+        wheel_glob: target/wheels/amplifier_core-*.whl
+
+provision:
+  setup_cmds:
+    # ---- 1. System deps ----
+    - apt-get update
+    - >-
+      apt-get install -y --no-install-recommends
+      git curl ca-certificates build-essential pkg-config libssl-dev
+      python3 python3-dev jq
+
+    # ---- 2. uv ----
+    - curl -LsSf https://astral.sh/uv/install.sh | sh
+    - export PATH="/root/.local/bin:$PATH" && uv --version
+
+    # ---- 3. Source mirrors (clone for inspection / future iteration) ----
+    # Repos in this Gitea are public; no auth needed for clone. The DTU
+    # substitutes ${GITEA_URL} at config time (only plain ${VAR} pattern is
+    # recognized — bash parameter expansion like ${VAR#prefix} is NOT
+    # substituted, so do not use it here).
+    - mkdir -p /root/work
+    - git clone ${GITEA_URL}/admin/amplifier-core.git /root/work/amplifier-core
+    - git clone ${GITEA_URL}/admin/amplifier-module-hooks-logging.git /root/work/amplifier-module-hooks-logging
+    - cd /root/work/amplifier-core && git rev-parse HEAD
+    - cd /root/work/amplifier-module-hooks-logging && git rev-parse HEAD
+
+    # ---- 4. Install Amplifier CLI ----
+    # amplifier-core is resolved from the local pypiserver (built on the host
+    # via pypi_overrides). Everything else comes from upstream.
+    - |
+      export PATH="/root/.local/bin:$PATH"
+      uv tool install -vv git+https://github.com/microsoft/amplifier@main
+    - export PATH="/root/.local/bin:$PATH" && amplifier --version
+
+    # ---- 5. Verify the locally-built amplifier-core is what got installed ----
+    # `amplifier` is not in any package registry, so we cannot use
+    # `uv tool run --from amplifier`. Use the python interpreter from the
+    # tool's own venv directly. `uv tool dir` returns the parent directory
+    # of all tool venvs.
+    - |
+      export PATH="/root/.local/bin:$PATH"
+      AMPLIFIER_PY="$(uv tool dir)/amplifier/bin/python"
+      echo "Using interpreter: $AMPLIFIER_PY"
+      "$AMPLIFIER_PY" -c "import amplifier_core; v = getattr(amplifier_core, '__version__', 'unknown'); print('amplifier_core:', v, 'from', amplifier_core.__file__)"
+
+    # ---- 6. Build the test bundle ----
+    - mkdir -p /root/e2e-bundle
+    - mkdir -p /tmp/e2e-logs
+    - |
+      cat > /root/e2e-bundle/bundle.md <<'BUNDLE_EOF'
+      ---
+      bundle:
+        name: e2e-event-logging-bundle
+        version: 1.0.0
+        description: Minimal bundle for end-to-end hooks-logging verification.
+
+      session:
+        orchestrator:
+          module: loop-basic
+          source: git+https://github.com/microsoft/amplifier-module-loop-basic@main
+        context:
+          module: context-simple
+          source: git+https://github.com/microsoft/amplifier-module-context-simple@main
+
+      providers:
+        - module: provider-mock
+          source: git+https://github.com/microsoft/amplifier-module-provider-mock@main
+          config:
+            response: "E2E test response."
+
+      hooks:
+        - module: hooks-logging
+          source: git+__GITEA_URL__/admin/amplifier-module-hooks-logging.git@main
+          config:
+            session_log_template: /tmp/e2e-logs/{project}/sessions/{session_id}/events.jsonl
+            auto_discover: true
+      ---
+
+      # E2E hooks-logging test bundle
+
+      Verifies that the hooks-logging module sourced from the local Gitea
+      mirror registers event handlers via `on_session_ready` and writes JSONL
+      records during a real `amplifier run` session.
+      BUNDLE_EOF
+      # Substitute __GITEA_URL__ with the (host-gateway-rewritten) Gitea URL.
+      sed -i "s|__GITEA_URL__|${GITEA_URL}|g" /root/e2e-bundle/bundle.md
+      echo "--- generated bundle.md ---"
+      cat /root/e2e-bundle/bundle.md
+      echo "--- end bundle.md ---"
+
+    # ---- 7. Register the test bundle and run ----
+    # `amplifier run --bundle <X>` resolves <X> against the bundle registry
+    # — it does not accept arbitrary file paths. So we register the local
+    # bundle directory via `amplifier bundle add file://...` first, then
+    # reference it by name. The name is taken from the bundle's metadata
+    # (`bundle.name` in the YAML frontmatter), so it is stable.
+    - |
+      export PATH="/root/.local/bin:$PATH"
+      amplifier bundle add file:///root/e2e-bundle --name e2e-event-logging-bundle
+      amplifier bundle list
+    - |
+      export PATH="/root/.local/bin:$PATH"
+      echo "=========================================="
+      echo "Running: amplifier run \"E2E verification prompt\" --bundle e2e-event-logging-bundle"
+      echo "=========================================="
+      set +e
+      amplifier run "E2E verification prompt" \
+        --bundle e2e-event-logging-bundle \
+        --mode single \
+        --output-format text \
+        2>&1 | tee /tmp/e2e-logs/amplifier-run.log
+      RUN_RC=${PIPESTATUS[0]}
+      set -e
+      echo "=========================================="
+      echo "amplifier run exit code: $RUN_RC"
+      echo "=========================================="
+      # Non-zero exit from `amplifier run` is informational here. The binary
+      # pass/fail signal is whether the JSONL file exists and contains the
+      # required events. Capture the rc but do not fail on it yet.
+      echo "$RUN_RC" > /tmp/e2e-logs/amplifier-run.rc
+
+    # ---- 8. Verify JSONL output (the actual binary test) ----
+    - |
+      echo "=========================================="
+      echo "Locating JSONL log file under /tmp/e2e-logs/"
+      echo "=========================================="
+      JSONL=$(find /tmp/e2e-logs -type f -name 'events.jsonl' | head -1 || true)
+      if [ -z "$JSONL" ]; then
+        echo "FAIL: no events.jsonl produced under /tmp/e2e-logs/" >&2
+        echo "Directory listing:" >&2
+        find /tmp/e2e-logs -maxdepth 6 -print >&2 || true
+        echo "--- amplifier run log tail ---" >&2
+        tail -200 /tmp/e2e-logs/amplifier-run.log >&2 || true
+        exit 1
+      fi
+      echo "Found JSONL: $JSONL"
+      echo "--- JSONL contents ---"
+      cat "$JSONL"
+      echo "--- /JSONL contents ---"
+
+      MISSING=""
+      for ev in "session:start" "prompt:submit" "session:end"; do
+        if ! grep -q "\"event\": \"$ev\"" "$JSONL"; then
+          MISSING="$MISSING $ev"
+        fi
+      done
+      if [ -n "$MISSING" ]; then
+        echo "FAIL: required event(s) missing from JSONL:$MISSING" >&2
+        echo "Found events:" >&2
+        jq -r '.event' "$JSONL" 2>/dev/null | sort -u >&2 || true
+        exit 1
+      fi
+      echo "PASS: all required events present (session:start, prompt:submit, session:end)"
+      echo "$JSONL" > /tmp/e2e-logs/jsonl-path.txt
+
+    # ---- 9. Workspace for ad-hoc reruns ----
+    - mkdir -p /home/user/project
+
+readiness:
+  - name: uv-installed
+    command: "/root/.local/bin/uv --version"
+  - name: amplifier-cli-installed
+    command: "/root/.local/bin/amplifier --version"
+  - name: amplifier-core-importable
+    # `amplifier` is not in any package registry — `uv tool run --from amplifier`
+    # fails. Use the python interpreter from the installed tool venv directly.
+    command: "bash -lc 'export PATH=/root/.local/bin:$PATH; \"$(uv tool dir)/amplifier/bin/python\" -c \"import amplifier_core; print(amplifier_core.__file__)\"'"
+
+update:
+  refresh_pypi: true
+  cmds:
+    # Pull latest from Gitea mirrors and reinstall.
+    - cd /root/work/amplifier-core && git fetch && git reset --hard origin/main
+    - cd /root/work/amplifier-module-hooks-logging && git fetch && git reset --hard origin/main
+    - rm -rf /root/.amplifier/cache/
+    - export PATH="/root/.local/bin:$PATH" && uv tool install --reinstall --force git+https://github.com/microsoft/amplifier@main
