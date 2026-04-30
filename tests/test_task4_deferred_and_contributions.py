@@ -1,13 +1,13 @@
-"""Tests for task-4: _deferred_configs module state and on_session_ready.
+"""Tests for on_session_ready and collect_contributions behaviour.
 
 Verifies:
-- _deferred_configs exists at module level as a list
-- mount() is slim: just appends config to _deferred_configs without registering hooks
-- on_session_ready() exists and processes deferred configs
+- mount() defers registration — no hooks until on_session_ready()
+- on_session_ready() exists and performs registration
 - on_session_ready() calls coordinator.collect_contributions("observability.events")
   when auto_discover=True
 - collect_contributions results are handled for both list and str shapes
 - on_session_ready() does NOT call collect_contributions when auto_discover=False
+- Each coordinator's setup is isolated — no cross-session contamination
 """
 
 import json
@@ -16,16 +16,7 @@ from unittest.mock import AsyncMock
 import pytest
 from amplifier_core.testing import MockCoordinator
 
-import amplifier_module_hooks_logging
-from amplifier_module_hooks_logging import _deferred_configs, mount, on_session_ready
-
-
-@pytest.fixture(autouse=True)
-def clear_deferred_configs():
-    """Clear _deferred_configs before and after each test to avoid leakage."""
-    _deferred_configs.clear()
-    yield
-    _deferred_configs.clear()
+from amplifier_module_hooks_logging import mount, on_session_ready
 
 
 @pytest.fixture
@@ -33,32 +24,7 @@ def coordinator():
     return MockCoordinator()
 
 
-# ─── Module-level state ────────────────────────────────────────────────────────
-
-
-def test_deferred_configs_is_module_level_list():
-    """_deferred_configs must exist at module level as a list."""
-    assert hasattr(amplifier_module_hooks_logging, "_deferred_configs")
-    assert isinstance(amplifier_module_hooks_logging._deferred_configs, list)
-
-
-# ─── mount() is slim ──────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_mount_appends_config_to_deferred_configs(coordinator):
-    """mount() must append the config dict to _deferred_configs."""
-    config = {"priority": 50}
-    await mount(coordinator, config)
-    assert len(_deferred_configs) == 1
-    assert _deferred_configs[0] == config
-
-
-@pytest.mark.asyncio
-async def test_mount_appends_empty_dict_when_config_is_none(coordinator):
-    """mount(coordinator, None) must append {} to _deferred_configs."""
-    await mount(coordinator, None)
-    assert _deferred_configs == [{}]
+# --- mount() defers registration -----------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -76,26 +42,13 @@ async def test_mount_does_not_register_hooks(coordinator, tmp_path):
     )
 
 
-# ─── on_session_ready() ───────────────────────────────────────────────────────
+# --- on_session_ready() --------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_on_session_ready_exists():
     """on_session_ready must be importable from the module."""
     assert callable(on_session_ready)
-
-
-@pytest.mark.asyncio
-async def test_on_session_ready_drains_deferred_configs(coordinator, tmp_path):
-    """on_session_ready() must drain _deferred_configs."""
-    template = str(tmp_path / "sessions" / "{session_id}" / "events.jsonl")
-    config = {"session_log_template": template, "auto_discover": False}
-    await mount(coordinator, config)
-    assert len(_deferred_configs) == 1
-
-    await on_session_ready(coordinator)
-
-    assert _deferred_configs == [], "on_session_ready must drain _deferred_configs"
 
 
 @pytest.mark.asyncio
@@ -117,7 +70,45 @@ async def test_on_session_ready_registers_hooks_and_logs(coordinator, tmp_path):
     assert log_file.exists(), "Hook must have registered and written the log file"
 
 
-# ─── collect_contributions call ───────────────────────────────────────────────
+# --- Per-coordinator isolation -------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_separate_coordinators_are_independent(tmp_path):
+    """Each coordinator stores its own setup — no cross-session contamination.
+
+    This is the regression test for the _deferred_configs module-level list bug:
+    if two sessions mount() before either calls on_session_ready(), the second
+    session's config must not bleed into the first session's handler.
+    """
+    coordinator1 = MockCoordinator()
+    coordinator2 = MockCoordinator()
+
+    template1 = str(tmp_path / "s1" / "{session_id}" / "events.jsonl")
+    template2 = str(tmp_path / "s2" / "{session_id}" / "events.jsonl")
+
+    # Both sessions mount before either calls on_session_ready
+    await mount(
+        coordinator1, {"session_log_template": template1, "auto_discover": False}
+    )
+    await mount(
+        coordinator2, {"session_log_template": template2, "auto_discover": False}
+    )
+
+    # Only coordinator1 reaches on_session_ready
+    await on_session_ready(coordinator1)
+
+    await coordinator1.hooks.emit("session:start", {"session_id": "test"})
+
+    log1 = tmp_path / "s1" / "test" / "events.jsonl"
+    log2 = tmp_path / "s2" / "test" / "events.jsonl"
+    assert log1.exists(), "coordinator1's handler must have fired"
+    assert not log2.exists(), (
+        "coordinator2's config must not have contaminated coordinator1's setup"
+    )
+
+
+# --- collect_contributions call ------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -152,7 +143,7 @@ async def test_on_session_ready_no_collect_contributions_when_auto_discover_fals
     coordinator.collect_contributions.assert_not_called()
 
 
-# ─── collect_contributions shapes ─────────────────────────────────────────────
+# --- collect_contributions shapes ----------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -211,26 +202,3 @@ async def test_collect_contributions_str_shape_registers_events(coordinator, tmp
     assert "custom:str_event" in events_logged, (
         f"custom:str_event must be logged; found: {events_logged}"
     )
-
-
-# ─── Multiple mounts ──────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_multiple_mounts_all_processed(coordinator, tmp_path):
-    """Multiple mount() calls must all be processed by on_session_ready()."""
-    template1 = str(tmp_path / "s1" / "{session_id}" / "events.jsonl")
-    template2 = str(tmp_path / "s2" / "{session_id}" / "events.jsonl")
-
-    await mount(
-        coordinator, {"session_log_template": template1, "auto_discover": False}
-    )
-    await mount(
-        coordinator, {"session_log_template": template2, "auto_discover": False}
-    )
-
-    assert len(_deferred_configs) == 2
-
-    await on_session_ready(coordinator)
-
-    assert _deferred_configs == [], "All deferred configs must be consumed"

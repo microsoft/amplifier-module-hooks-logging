@@ -5,7 +5,7 @@ requires-python = ">=3.11"
 [[package]]
 name = "amplifier-core"
 version = "1.4.1"
-source = { directory = "../amplifier-core" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
     { name = "pydantic" },
@@ -13,24 +13,13 @@ dependencies = [
     { name = "tomli" },
     { name = "typing-extensions" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "click", specifier = ">=8.3.1" },
-    { name = "pydantic", specifier = ">=2.0" },
-    { name = "pyyaml", specifier = ">=6.0.3" },
-    { name = "tomli", specifier = ">=2.0" },
-    { name = "typing-extensions", specifier = ">=4.0" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "grpcio", specifier = ">=1.60" },
-    { name = "grpcio-tools", specifier = ">=1.60" },
-    { name = "maturin", specifier = ">=1.9" },
-    { name = "protobuf", specifier = ">=5.0" },
-    { name = "pytest", specifier = ">=8.4.2" },
-    { name = "pytest-asyncio", specifier = ">=1.3.0" },
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d1/53/55e91e7f61aad0b1c5b06341151d9aef2af018e80c90617da1974bb49848/amplifier_core-1.4.1-cp311-abi3-macosx_10_12_x86_64.whl", hash = "sha256:5144474c6d6ed1d91b98b39ad0587c5b16c636b6b50a32a06c12c82c572bec1b", size = 8111213, upload-time = "2026-04-25T10:21:48.894Z" },
+    { url = "https://files.pythonhosted.org/packages/4d/8e/c1e7241d49d0c8236781c64a2a146b8c280033be419c2a090e8605315466/amplifier_core-1.4.1-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:c209cea83add8e1eaf89e7725d272e8752cd330b6e6d5f8dbb5455828d57bdbf", size = 7227833, upload-time = "2026-04-25T10:21:51.12Z" },
+    { url = "https://files.pythonhosted.org/packages/31/70/b388f205ee0c0049b8f6734174bb569496baecc63fd876a8c28624661bba/amplifier_core-1.4.1-cp311-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:36282df52945a0510968a20438303dc356902cbb69d3b95ce90c1d15a58744e6", size = 7486001, upload-time = "2026-04-25T10:21:53.154Z" },
+    { url = "https://files.pythonhosted.org/packages/15/3c/f8576d781a322080e1b3e574fb92f734710a1a7d5603649840ece949effb/amplifier_core-1.4.1-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:2a9eb6e8f315a2150446bcfdf29909a13046822c975bf1a56c67d5a5d58138b1", size = 8523551, upload-time = "2026-04-25T10:21:55.634Z" },
+    { url = "https://files.pythonhosted.org/packages/97/c5/42be2e5b2b1dc6b8d21b1283d2219e0c682eff8feb4aa60d1a9286cacfa2/amplifier_core-1.4.1-cp311-abi3-win_amd64.whl", hash = "sha256:df4cdb84e15eb370884fc560e0d475ee43d7aede4d9a7a7e017a60a27b8d88cb", size = 8950281, upload-time = "2026-04-25T10:21:58.394Z" },
+    { url = "https://files.pythonhosted.org/packages/4b/ae/338a5fed7432baae834c21de5a258be4c5b53e7f55e0eab397e8448f7695/amplifier_core-1.4.1-cp311-abi3-win_arm64.whl", hash = "sha256:d705c019059dadbc7ac5f7da8de421bce07c9a725d5148a6377b3bcb97b0d982", size = 7615807, upload-time = "2026-04-25T10:22:01.016Z" },
 ]
 
 [[package]]
@@ -49,7 +38,7 @@ dev = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "amplifier-core", directory = "../amplifier-core" },
+    { name = "amplifier-core", specifier = ">=1.4.1" },
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "pytest-asyncio", specifier = ">=0.21" },
 ]
