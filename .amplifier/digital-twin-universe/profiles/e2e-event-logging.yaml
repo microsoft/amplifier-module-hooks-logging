@@ -1,8 +1,7 @@
 # True end-to-end verification for hooks-logging.
 #
-# Goal: prove that the locally-developed hooks-logging module (feature branch
-# `feat/on-session-ready`) correctly registers event handlers inside a real
-# Amplifier CLI session and writes JSONL records to disk. The test is binary:
+# Goal: prove that the hooks-logging module correctly registers event handlers
+# inside a real Amplifier CLI session and writes JSONL records to disk. The test is binary:
 # either the JSONL file exists at the configured path with the expected
 # events (`session:start`, `prompt:submit`, `session:end`) — or it does not
 # (regression).
@@ -65,7 +64,7 @@ url_rewrites:
   rules:
     - match: github.com/microsoft/amplifier-core
       target: ${GITEA_URL}/admin/amplifier-core
-    - match: github.com/colombod/amplifier-module-hooks-logging
+    - match: github.com/microsoft/amplifier-module-hooks-logging
       target: ${GITEA_URL}/admin/amplifier-module-hooks-logging
 
 # Build amplifier-core from the Gitea mirror on the host (where cargo/rustc
