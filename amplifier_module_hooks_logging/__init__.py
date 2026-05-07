@@ -65,10 +65,14 @@ def _sanitize_for_json(value: Any) -> Any:
                 return {k: _sanitize_for_json(v) for k, v in value.items()}
             return [_sanitize_for_json(item) for item in value]
 
-    # Pydantic models: use model_dump() instead of dir() introspection
+    # Pydantic models: use model_dump(mode='json') so Pydantic converts
+    # non-JSON-native types (Decimal, datetime, UUID, etc.) to JSON-safe
+    # primitives before we return. Plain model_dump() preserves Python types
+    # like Decimal, which then survive into the sanitized record and crash
+    # json.dumps() at write time.
     if hasattr(value, "model_dump"):
         try:
-            return value.model_dump()
+            return value.model_dump(mode="json")
         except Exception:
             pass  # Fall through to __dict__ approach
 
