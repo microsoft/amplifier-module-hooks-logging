@@ -146,16 +146,25 @@ async def _setup_and_register(
     session_logger = _SessionLogger(session_log_template, working_dir=working_dir_path)
 
     async def handler(event: str, data: dict[str, Any]) -> HookResult:
+        # Prefer the kernel-stamped emit-time timestamp from data["timestamp"]
+        # (amplifier-core/.../hooks.rs:196-203 stamps every emit before handlers run).
+        # Fall back to _ts() only when absent — defense in depth for legacy emit paths
+        # that bypass the kernel registry. The kernel's timestamp reflects actual emit
+        # time; _ts() reflects handler-execution time, which can skew by hundreds of
+        # milliseconds for events with slow upstream handlers in the chain.
         rec = {
-            "ts": _ts(),
+            "ts": data.get("timestamp") or _ts(),
             "lvl": data.get("lvl", "INFO"),  # Use provided level or default to INFO
             "schema": SCHEMA,
             "event": event,
         }
+        # Strip "timestamp" before building the payload so it is not duplicated:
+        # it is already promoted to rec["ts"] above.
+        data_remaining = {k: v for k, v in (data or {}).items() if k != "timestamp"}
         # Merge data (ensure serializable)
         payload = {}
         try:
-            for k, v in (data or {}).items():
+            for k, v in data_remaining.items():
                 if k in (
                     "redaction",
                     "status",
@@ -170,7 +179,7 @@ async def _setup_and_register(
                 ):
                     payload[k] = v
             # Store all event-specific data under "data" field for JSONL output
-            event_data = {k: v for k, v in (data or {}).items() if k not in payload}
+            event_data = {k: v for k, v in data_remaining.items() if k not in payload}
             if strip_raw:
                 event_data.pop("raw", None)
             if event_data:
