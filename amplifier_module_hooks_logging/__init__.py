@@ -232,6 +232,14 @@ async def _setup_and_register(
         events.extend(additional)
         logger.info(f"Added {len(additional)} configured events: {additional}")
 
+    # Deduplicate while preserving order — contributors may list events that are
+    # already in ALL_EVENTS (e.g. provider-gemini contributes llm:request /
+    # llm:response; loop-streaming contributes execution:start / execution:end).
+    # The Rust HookRegistry.register() has no dedup-by-name guard, so without
+    # this step every such duplicate causes double-firing: one emit → two log
+    # lines.  dict.fromkeys() preserves insertion order (Python 3.7+).
+    events = list(dict.fromkeys(events))
+
     # Register handlers for all events
     for ev in events:
         coordinator.hooks.register(ev, handler, priority=priority, name="hooks-logging")
