@@ -70,6 +70,47 @@ hooks:
         - "custom:my:event"
 ```
 
+### Event Exclusion Filter
+
+The `exclude_events` key suppresses high-frequency events from `events.jsonl`
+without unregistering them from the hook system.  The handler returns
+`continue` immediately — no record is built or written.
+
+Patterns follow `fnmatch.fnmatch` semantics: `*` matches any sequence of
+characters, `?` matches exactly one character, and `[seq]` matches any
+character in *seq*.  Matching is case-sensitive.
+
+**Default:** `["llm:stream_block_delta"]`
+
+`events.jsonl` is a session audit log only — it is **not** used for session
+resume.  Per-token `llm:stream_block_delta` events are emitted once per
+token-ish fragment (hundreds to thousands per turn) and flood the log with no
+audit value.  The surrounding `llm:stream_block_start`, `llm:stream_block_end`,
+and `llm:stream_aborted` events are kept.
+
+```yaml
+hooks:
+  - module: hooks-logging
+    config:
+      # Default: only drop per-token deltas (recommended)
+      exclude_events:
+        - "llm:stream_block_delta"
+
+      # Drop all four streaming-related events
+      # exclude_events:
+      #   - "llm:stream_*"
+
+      # Disable the filter entirely (write every event — useful for debugging)
+      # exclude_events: []
+```
+
+| Setting | Effect |
+|---------|--------|
+| *(absent)* | Uses default: `["llm:stream_block_delta"]` |
+| `["llm:stream_block_delta"]` | Drop only per-token deltas (default) |
+| `["llm:stream_*"]` | Drop all four streaming events |
+| `[]` | Disable filter — write every event |
+
 ### Hybrid Approach
 
 Combine auto-discovery with manual additions:
