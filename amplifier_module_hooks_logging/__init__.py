@@ -1,11 +1,64 @@
 """
 Unified JSONL logging hook.
 Writes structured logs to per-session event files.
+
+Configuration keys
+------------------
+priority : int, default 100
+    Hook execution priority.
+session_log_template : str
+    Path template for per-session event files.  ``{project}`` and
+    ``{session_id}`` are interpolated at write time.
+    Default: ``~/.amplifier/projects/{project}/sessions/{session_id}/events.jsonl``
+auto_discover : bool, default True
+    When True, register handlers for module-contributed events discovered
+    via ``coordinator.get_capability("observability.events")`` and
+    ``coordinator.collect_contributions("observability.events")``.
+strip_raw : bool, default False
+    When True, strip the ``raw`` field from event data before writing.
+additional_events : list[str], default []
+    Extra event names to register handlers for (beyond those in ALL_EVENTS
+    and auto-discovered events).
+exclude_events : list[str], default ["llm:stream_*delta"]
+    List of event-name patterns (``fnmatch`` semantics) that are silently
+    dropped from ``events.jsonl``.  The handler returns ``continue``
+    immediately without building or writing a record.
+
+    Patterns follow ``fnmatch.fnmatch`` rules — ``*`` matches any sequence
+    of characters, ``?`` matches exactly one character, ``[seq]`` matches
+    any character in *seq*.  Matching is case-sensitive.
+
+    Default ``["llm:stream_*delta"]`` expresses the *transient streaming
+    delta category* — events whose names end in ``delta`` — as defined by
+    the "Event dispositions" convention in the provider streaming contract.
+    The glob matches ``llm:stream_block_delta`` (and any future ``*_delta``
+    variants) while intentionally sparing the structural events
+    ``llm:stream_block_start``, ``llm:stream_block_end``, and
+    ``llm:stream_aborted``, which carry audit value and are kept.
+
+    This default is intentionally identical to the context-intelligence
+    hook's default.  Alignment is maintained via the provider streaming
+    contract — NOT by shared code.  Never extract a shared constant or
+    helper module; keep the hooks in sync through the contract instead.
+
+    To disable the filter entirely set ``exclude_events: []`` in config.
+
+    Examples::
+
+        # Default — drop transient streaming deltas (convention pattern)
+        exclude_events: ["llm:stream_*delta"]
+
+        # Drop all four streaming-related events
+        exclude_events: ["llm:stream_*"]
+
+        # Disable the filter — write every event (useful for debugging)
+        exclude_events: []
 """
 
 # Amplifier module metadata
 __amplifier_module_type__ = "hook"
 
+import fnmatch
 import json
 import logging
 from datetime import UTC
@@ -25,6 +78,21 @@ SCHEMA = {"name": "amplifier.log", "ver": "1.0.0"}
 # State is stashed on the coordinator (which is per-session) so concurrent
 # sessions cannot drain each other's config.
 _SETUP_KEY = "hooks_logging._setup"
+
+# Default patterns suppressed from events.jsonl.
+#
+# Pattern: "llm:stream_*delta" — the *transient streaming delta* category from the
+# provider streaming contract's "Event dispositions" convention.  The glob matches
+# any event whose name ends in "delta" under the "llm:stream_" namespace (e.g.
+# llm:stream_block_delta, and any future *_delta variants), while intentionally
+# sparing the structural events block_start / block_end / stream_aborted whose
+# bookkeeping value justifies persisting them to events.jsonl.
+#
+# This default is intentionally IDENTICAL to the context-intelligence hook's
+# default.  Alignment is maintained via the provider streaming contract, NOT by
+# shared code — keep them in sync through the contract; never extract a shared
+# constant or helper module.
+_DEFAULT_EXCLUDE_EVENTS: list[str] = ["llm:stream_*delta"]
 
 
 def _ts() -> str:
@@ -112,6 +180,12 @@ async def _setup_and_register(
     auto_discover = config.get("auto_discover", True)
     strip_raw = config.get("strip_raw", False)
 
+    # Event-exclusion filter: fnmatch patterns whose matching events are
+    # silently dropped from events.jsonl.  Default is the "llm:stream_*delta"
+    # convention glob from the provider streaming contract — aligns with the
+    # context-intelligence hook's default via contract, not shared code.
+    exclude_events: list[str] = config.get("exclude_events", _DEFAULT_EXCLUDE_EVENTS)
+
     # Get working directory from capability (falls back to cwd for backward compatibility)
     working_dir = coordinator.get_capability("session.working_dir")
     working_dir_path = Path(working_dir) if working_dir else None
@@ -146,6 +220,13 @@ async def _setup_and_register(
     session_logger = _SessionLogger(session_log_template, working_dir=working_dir_path)
 
     async def handler(event: str, data: dict[str, Any]) -> HookResult:
+        # --- Event-exclusion filter (single choke point before any processing) ---
+        # If the event name matches any pattern in exclude_events, skip it entirely.
+        # No record is built and no write occurs — just return continue.
+        # This is the sole write choke point; session_logger.write() is downstream.
+        if exclude_events and any(fnmatch.fnmatch(event, p) for p in exclude_events):
+            return HookResult(action="continue")
+
         # Prefer the kernel-stamped emit-time timestamp from data["timestamp"]
         # (amplifier-core/.../hooks.rs:196-203 stamps every emit before handlers run).
         # Fall back to _ts() only when absent — defense in depth for legacy emit paths

@@ -70,6 +70,55 @@ hooks:
         - "custom:my:event"
 ```
 
+### Event Exclusion Filter
+
+The `exclude_events` key suppresses high-frequency events from `events.jsonl`
+without unregistering them from the hook system.  The handler returns
+`continue` immediately — no record is built or written.
+
+Patterns follow `fnmatch.fnmatch` semantics: `*` matches any sequence of
+characters, `?` matches exactly one character, and `[seq]` matches any
+character in *seq*.  Matching is case-sensitive.
+
+**Default:** `["llm:stream_*delta"]`
+
+`events.jsonl` is a session audit log only — it is **not** used for session
+resume.  The default `"llm:stream_*delta"` glob is the **convention pattern**
+from the provider streaming contract's "Event dispositions" section.  It
+matches the transient streaming delta category (e.g. `llm:stream_block_delta`,
+and any future `*_delta` variants) — events that are emitted once per
+token-ish fragment (hundreds to thousands per turn) and flood the log with no
+audit value.  The structural events `llm:stream_block_start`,
+`llm:stream_block_end`, and `llm:stream_aborted` are intentionally spared.
+
+> **Convention note:** This default is intentionally identical to the
+> context-intelligence hook's default.  The two hooks stay aligned via the
+> provider streaming contract, **not** by shared code — never extract a shared
+> constant; update both hooks by updating the contract.
+
+```yaml
+hooks:
+  - module: hooks-logging
+    config:
+      # Default: drop transient streaming deltas (convention pattern)
+      exclude_events:
+        - "llm:stream_*delta"
+
+      # Drop all four streaming-related events
+      # exclude_events:
+      #   - "llm:stream_*"
+
+      # Disable the filter entirely (write every event — useful for debugging)
+      # exclude_events: []
+```
+
+| Setting | Effect |
+|---------|--------|
+| *(absent)* | Uses default: `["llm:stream_*delta"]` (convention glob) |
+| `["llm:stream_*delta"]` | Drop transient delta events; keep structural events (default) |
+| `["llm:stream_*"]` | Drop all four streaming events |
+| `[]` | Disable filter — write every event |
+
 ### Hybrid Approach
 
 Combine auto-discovery with manual additions:
