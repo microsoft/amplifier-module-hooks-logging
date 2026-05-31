@@ -80,21 +80,29 @@ Patterns follow `fnmatch.fnmatch` semantics: `*` matches any sequence of
 characters, `?` matches exactly one character, and `[seq]` matches any
 character in *seq*.  Matching is case-sensitive.
 
-**Default:** `["llm:stream_block_delta"]`
+**Default:** `["llm:stream_*delta"]`
 
 `events.jsonl` is a session audit log only — it is **not** used for session
-resume.  Per-token `llm:stream_block_delta` events are emitted once per
+resume.  The default `"llm:stream_*delta"` glob is the **convention pattern**
+from the provider streaming contract's "Event dispositions" section.  It
+matches the transient streaming delta category (e.g. `llm:stream_block_delta`,
+and any future `*_delta` variants) — events that are emitted once per
 token-ish fragment (hundreds to thousands per turn) and flood the log with no
-audit value.  The surrounding `llm:stream_block_start`, `llm:stream_block_end`,
-and `llm:stream_aborted` events are kept.
+audit value.  The structural events `llm:stream_block_start`,
+`llm:stream_block_end`, and `llm:stream_aborted` are intentionally spared.
+
+> **Convention note:** This default is intentionally identical to the
+> context-intelligence hook's default.  The two hooks stay aligned via the
+> provider streaming contract, **not** by shared code — never extract a shared
+> constant; update both hooks by updating the contract.
 
 ```yaml
 hooks:
   - module: hooks-logging
     config:
-      # Default: only drop per-token deltas (recommended)
+      # Default: drop transient streaming deltas (convention pattern)
       exclude_events:
-        - "llm:stream_block_delta"
+        - "llm:stream_*delta"
 
       # Drop all four streaming-related events
       # exclude_events:
@@ -106,8 +114,8 @@ hooks:
 
 | Setting | Effect |
 |---------|--------|
-| *(absent)* | Uses default: `["llm:stream_block_delta"]` |
-| `["llm:stream_block_delta"]` | Drop only per-token deltas (default) |
+| *(absent)* | Uses default: `["llm:stream_*delta"]` (convention glob) |
+| `["llm:stream_*delta"]` | Drop transient delta events; keep structural events (default) |
 | `["llm:stream_*"]` | Drop all four streaming events |
 | `[]` | Disable filter — write every event |
 

@@ -19,7 +19,7 @@ strip_raw : bool, default False
 additional_events : list[str], default []
     Extra event names to register handlers for (beyond those in ALL_EVENTS
     and auto-discovered events).
-exclude_events : list[str], default ["llm:stream_block_delta"]
+exclude_events : list[str], default ["llm:stream_*delta"]
     List of event-name patterns (``fnmatch`` semantics) that are silently
     dropped from ``events.jsonl``.  The handler returns ``continue``
     immediately without building or writing a record.
@@ -28,17 +28,25 @@ exclude_events : list[str], default ["llm:stream_block_delta"]
     of characters, ``?`` matches exactly one character, ``[seq]`` matches
     any character in *seq*.  Matching is case-sensitive.
 
-    Default ``["llm:stream_block_delta"]`` drops the per-token streaming
-    delta event, which can produce thousands of entries per turn and is not
-    needed for audit purposes (the surrounding ``llm:stream_block_start``
-    / ``llm:stream_block_end`` / ``llm:stream_aborted`` events are kept).
+    Default ``["llm:stream_*delta"]`` expresses the *transient streaming
+    delta category* — events whose names end in ``delta`` — as defined by
+    the "Event dispositions" convention in the provider streaming contract.
+    The glob matches ``llm:stream_block_delta`` (and any future ``*_delta``
+    variants) while intentionally sparing the structural events
+    ``llm:stream_block_start``, ``llm:stream_block_end``, and
+    ``llm:stream_aborted``, which carry audit value and are kept.
+
+    This default is intentionally identical to the context-intelligence
+    hook's default.  Alignment is maintained via the provider streaming
+    contract — NOT by shared code.  Never extract a shared constant or
+    helper module; keep the hooks in sync through the contract instead.
 
     To disable the filter entirely set ``exclude_events: []`` in config.
 
     Examples::
 
-        # Default — drop only per-token deltas (recommended)
-        exclude_events: ["llm:stream_block_delta"]
+        # Default — drop transient streaming deltas (convention pattern)
+        exclude_events: ["llm:stream_*delta"]
 
         # Drop all four streaming-related events
         exclude_events: ["llm:stream_*"]
@@ -72,10 +80,19 @@ SCHEMA = {"name": "amplifier.log", "ver": "1.0.0"}
 _SETUP_KEY = "hooks_logging._setup"
 
 # Default patterns suppressed from events.jsonl.
-# llm:stream_block_delta fires once per token-ish fragment (hundreds-to-thousands
-# per turn) and floods the audit log.  The surrounding block_start / block_end /
-# stream_aborted events are sufficient for audit purposes.
-_DEFAULT_EXCLUDE_EVENTS: list[str] = ["llm:stream_block_delta"]
+#
+# Pattern: "llm:stream_*delta" — the *transient streaming delta* category from the
+# provider streaming contract's "Event dispositions" convention.  The glob matches
+# any event whose name ends in "delta" under the "llm:stream_" namespace (e.g.
+# llm:stream_block_delta, and any future *_delta variants), while intentionally
+# sparing the structural events block_start / block_end / stream_aborted whose
+# bookkeeping value justifies persisting them to events.jsonl.
+#
+# This default is intentionally IDENTICAL to the context-intelligence hook's
+# default.  Alignment is maintained via the provider streaming contract, NOT by
+# shared code — keep them in sync through the contract; never extract a shared
+# constant or helper module.
+_DEFAULT_EXCLUDE_EVENTS: list[str] = ["llm:stream_*delta"]
 
 
 def _ts() -> str:
@@ -164,9 +181,9 @@ async def _setup_and_register(
     strip_raw = config.get("strip_raw", False)
 
     # Event-exclusion filter: fnmatch patterns whose matching events are
-    # silently dropped from events.jsonl.  Mirrors the identical interface
-    # in hook-context-intelligence for operator consistency.
-    # Default suppresses llm:stream_block_delta (per-token flood events).
+    # silently dropped from events.jsonl.  Default is the "llm:stream_*delta"
+    # convention glob from the provider streaming contract — aligns with the
+    # context-intelligence hook's default via contract, not shared code.
     exclude_events: list[str] = config.get("exclude_events", _DEFAULT_EXCLUDE_EVENTS)
 
     # Get working directory from capability (falls back to cwd for backward compatibility)

@@ -4,19 +4,21 @@ Verifies that the `exclude_events` config key suppresses matching events
 from JSONL output (no record written, handler returns continue immediately).
 
 Contracts:
-- Default config: ``["llm:stream_block_delta"]`` — that event is silently
-  dropped while all other events (including other streaming events) pass.
+- Default config: ``["llm:stream_*delta"]`` — events matching that glob
+  (i.e. ``llm:stream_block_delta`` and any future ``*_delta`` variants) are
+  silently dropped while structural events and ordinary events pass through.
 - ``exclude_events: []`` — disables the filter; every event is written.
 - Custom pattern ``"llm:stream_*"`` — drops all four streaming events.
 - fnmatch wildcard semantics (``?``, ``*``, ``[…]``) are used for matching.
 """
 
+import fnmatch
 import json
 
 import pytest
 from amplifier_core.testing import MockCoordinator
 
-from amplifier_module_hooks_logging import mount, on_session_ready
+from amplifier_module_hooks_logging import _DEFAULT_EXCLUDE_EVENTS, mount, on_session_ready
 
 # All four streaming events introduced by the provider streaming feature.
 STREAMING_EVENTS = [
@@ -95,12 +97,29 @@ def _event_names(records: list) -> set:
 async def test_default_drops_stream_block_delta_not_other_events(
     coordinator, tmp_path
 ):
-    """Default config silently drops llm:stream_block_delta; all others are written.
+    """Default config silently drops llm:stream_*delta events; all others are written.
 
-    The default value of exclude_events is ["llm:stream_block_delta"].
-    The three related streaming events (block_start, block_end, aborted) and
-    ordinary events like llm:response must continue to be logged.
+    The default value of _DEFAULT_EXCLUDE_EVENTS is ["llm:stream_*delta"] — the
+    convention glob from the provider streaming contract.  It matches
+    ``llm:stream_block_delta`` while intentionally sparing the structural events
+    block_start, block_end, aborted, and ordinary events like llm:response.
     """
+    # Verify the default constant value and glob semantics before running the
+    # full integration test.
+    assert _DEFAULT_EXCLUDE_EVENTS == ["llm:stream_*delta"], (
+        f"Expected default ['llm:stream_*delta'], got {_DEFAULT_EXCLUDE_EVENTS}"
+    )
+    pattern = _DEFAULT_EXCLUDE_EVENTS[0]
+    # Glob MUST match the transient delta event
+    assert fnmatch.fnmatch("llm:stream_block_delta", pattern), (
+        f"Pattern {pattern!r} must match 'llm:stream_block_delta'"
+    )
+    # Glob MUST spare the structural streaming events
+    for structural in ("llm:stream_block_start", "llm:stream_block_end", "llm:stream_aborted"):
+        assert not fnmatch.fnmatch(structural, pattern), (
+            f"Pattern {pattern!r} must NOT match structural event {structural!r}"
+        )
+
     # Mount WITHOUT specifying exclude_events -> should use default
     await _mount_with_tempdir(
         coordinator,
